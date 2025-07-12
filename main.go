@@ -1,0 +1,412 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+var (
+	version   = "v0.0.0-dev"
+	buildDate = "unknown"
+	commitSHA = "unknown"
+)
+
+const (
+	Reset   = "\033[0m"
+	Bold    = "\033[1m"
+	Dim     = "\033[2m"
+	Red     = "\033[31m"
+	Green   = "\033[32m"
+	Yellow  = "\033[33m"
+	Blue    = "\033[34m"
+	Magenta = "\033[35m"
+	Cyan    = "\033[36m"
+)
+
+type Config struct {
+	LogFile   string            `json:"log_file"`
+	LogLevels map[string]string `json:"log_levels"`
+}
+
+type FileSystem interface {
+	UserHomeDir() (string, error)
+	MkdirAll(path string, perm os.FileMode) error
+	WriteFile(filename string, data []byte, perm os.FileMode) error
+	ReadFile(filename string) ([]byte, error)
+	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
+}
+
+type Printer interface {
+	Print(msg string)
+	PrintSuccess(msg string)
+	PrintError(msg string)
+	PrintWarning(msg string)
+}
+
+type RealFileSystem struct{}
+
+func (fs *RealFileSystem) UserHomeDir() (string, error) {
+	return os.UserHomeDir()
+}
+
+func (fs *RealFileSystem) MkdirAll(path string, perm os.FileMode) error {
+	return os.MkdirAll(path, perm)
+}
+
+func (fs *RealFileSystem) WriteFile(filename string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(filename, data, perm)
+}
+
+func (fs *RealFileSystem) ReadFile(filename string) ([]byte, error) {
+	return os.ReadFile(filename)
+}
+
+func (fs *RealFileSystem) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(name, flag, perm)
+}
+
+type ConsolePrinter struct{}
+
+func (p *ConsolePrinter) Print(msg string) {
+	fmt.Println(msg)
+}
+
+func (p *ConsolePrinter) PrintSuccess(msg string) {
+	fmt.Println(Green + msg + Reset)
+}
+
+func (p *ConsolePrinter) PrintError(msg string) {
+	fmt.Println(Red + msg + Reset)
+}
+
+func (p *ConsolePrinter) PrintWarning(msg string) {
+	fmt.Println(Yellow + msg + Reset)
+}
+
+type ConfigService struct {
+	fs      FileSystem
+	printer Printer
+}
+
+func NewConfigService(fs FileSystem, printer Printer) *ConfigService {
+	return &ConfigService{fs: fs, printer: printer}
+}
+
+func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string) error {
+	existingConfig, _ := cs.LoadConfig()
+
+	config := Config{
+		LogFile:   "./log.txt",
+		LogLevels: map[string]string{"info": "i"},
+	}
+
+	if existingConfig != nil {
+		config = *existingConfig
+	}
+
+	if logFile != "" {
+		config.LogFile = logFile
+	}
+
+	if logLevels != nil {
+		config.LogLevels = logLevels
+	}
+
+	if config.LogFile == "" {
+		return fmt.Errorf("log file path is required")
+	}
+
+	homeDir, err := cs.fs.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("error getting home directory: %w", err)
+	}
+
+	configDir := filepath.Join(homeDir, ".slog")
+	err = cs.fs.MkdirAll(configDir, 0755)
+	if err != nil {
+		return fmt.Errorf("error creating config directory: %w", err)
+	}
+
+	configFile := filepath.Join(configDir, "config.json")
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error marshaling config: %w", err)
+	}
+
+	err = cs.fs.WriteFile(configFile, data, 0644)
+	if err != nil {
+		return fmt.Errorf("error writing config file: %w", err)
+	}
+
+	cs.printer.PrintSuccess("Configuration saved successfully")
+	cs.printer.Print(Bold + "Log File: " + Reset + config.LogFile)
+	cs.printer.Print(Bold + "Log Levels: " + Reset + fmt.Sprintf("%v", config.LogLevels))
+
+	return nil
+}
+
+func (cs *ConfigService) LoadConfig() (*Config, error) {
+	homeDir, err := cs.fs.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("error getting home directory: %w", err)
+	}
+
+	configFile := filepath.Join(homeDir, ".slog", "config.json")
+	data, err := cs.fs.ReadFile(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("error reading config file: %w\nPlease run 'config' first", err)
+	}
+
+	var config Config
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing config file: %w", err)
+	}
+
+	return &config, nil
+}
+
+func (cs *ConfigService) ViewConfig() error {
+	config, err := cs.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	cs.printer.Print(Bold + Cyan + "Current Configuration:" + Reset)
+	cs.printer.Print(Bold + "Log File: " + Reset + config.LogFile)
+	cs.printer.Print(Bold + "Log Levels: " + Reset + fmt.Sprintf("%v", config.LogLevels))
+
+	return nil
+}
+
+type LogService struct {
+	configService *ConfigService
+	fs            FileSystem
+	printer       Printer
+}
+
+func NewLogService(configService *ConfigService, fs FileSystem, printer Printer) *LogService {
+	return &LogService{
+		configService: configService,
+		fs:            fs,
+		printer:       printer,
+	}
+}
+
+func (ls *LogService) AppendLog(level, message string) error {
+	config, err := ls.configService.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	if !utf8.ValidString(message) {
+		return fmt.Errorf("message contains invalid UTF-8")
+	}
+
+	if level == "" {
+		level = "info"
+	}
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	logEntry := fmt.Sprintf("[%s] %s: %s\n", timestamp, strings.ToUpper(level), message)
+
+	file, err := ls.fs.OpenFile(config.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("error opening log file: %w", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			fmt.Printf("Warning: failed to close log file: %v\n", err)
+		}
+	}()
+
+	_, err = file.WriteString(logEntry)
+	if err != nil {
+		return fmt.Errorf("error writing to log file: %w", err)
+	}
+
+	ls.printer.PrintSuccess(fmt.Sprintf("Logged to %s", config.LogFile))
+	return nil
+}
+
+type App struct {
+	configService *ConfigService
+	logService    *LogService
+	printer       Printer
+}
+
+func NewApp() *App {
+	fs := &RealFileSystem{}
+	printer := &ConsolePrinter{}
+
+	configService := NewConfigService(fs, printer)
+	logService := NewLogService(configService, fs, printer)
+
+	return &App{
+		configService: configService,
+		logService:    logService,
+		printer:       printer,
+	}
+}
+
+func (app *App) HandleConfig(logFile string, logLevels map[string]string) error {
+	return app.configService.SaveConfig(logFile, logLevels)
+}
+
+func (app *App) HandleView() error {
+	return app.configService.ViewConfig()
+}
+
+func (app *App) HandleLog(level, message string) error {
+	return app.logService.AppendLog(level, message)
+}
+
+func (app *App) ShowVersion() {
+	app.printer.Print(Bold + Magenta + "SLog" + Reset + " " + Dim + version + Reset)
+	if version != "v0.0.0-dev" {
+		app.printer.Print(Dim + "Build Date: " + buildDate + Reset)
+		app.printer.Print(Dim + "Commit: " + commitSHA + Reset)
+	}
+	app.printer.Print(Dim + "Simple logging tool with configurable levels" + Reset)
+}
+
+func (app *App) ShowHelp() {
+	app.printer.Print(Bold + Magenta + "SLog" + Reset + " " + Dim + version + Reset)
+	app.printer.Print(Dim + Magenta + "Simple logging tool with configurable levels" + Reset)
+	app.printer.Print("")
+	app.printer.Print(Bold + "Commands:" + Reset)
+	app.printer.Print("  config    Configure log file and levels")
+	app.printer.Print("  view      View current configuration")
+	app.printer.Print("  help      Show this help message")
+	app.printer.Print("")
+	app.printer.Print(Bold + "Usage:" + Reset)
+	app.printer.Print("  slog [level-flag] <message>")
+	app.printer.Print("")
+	app.printer.Print(Bold + "Flags:" + Reset)
+	app.printer.Print("  --version, -v    Show version information")
+	app.printer.Print("  --help, -h       Show this help message")
+	app.printer.Print("")
+	app.printer.Print(Bold + "Examples:" + Reset)
+	app.printer.Print("  slog config -file ./app.log -levels 'info:i,warn:w,error:e'")
+	app.printer.Print("  slog view")
+	app.printer.Print("  slog \"Application started\"")
+	app.printer.Print("  slog -i \"Info message\"")
+	app.printer.Print("  slog -w \"Warning message\"")
+}
+
+func parseLevels(levelsStr string) map[string]string {
+	levels := make(map[string]string)
+	if levelsStr == "" {
+		return levels
+	}
+
+	pairs := strings.Split(levelsStr, ",")
+	for _, pair := range pairs {
+		parts := strings.Split(strings.TrimSpace(pair), ":")
+		if len(parts) == 2 {
+			levels[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+	return levels
+}
+
+func main() {
+	app := NewApp()
+
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "--version", "-v":
+			app.ShowVersion()
+			return
+		case "--help", "-h":
+			app.ShowHelp()
+			return
+		}
+	}
+
+	configCmd := flag.NewFlagSet("config", flag.ExitOnError)
+	logFile := configCmd.String("file", "", "Path to log file")
+	logLevelsStr := configCmd.String("levels", "", "Log levels in format 'level:flag,level:flag' (e.g. 'info:i,warn:w,error:e')")
+
+	viewCmd := flag.NewFlagSet("view", flag.ExitOnError)
+	helpCmd := flag.NewFlagSet("help", flag.ExitOnError)
+
+	if len(os.Args) < 2 {
+		app.ShowHelp()
+		return
+	}
+
+	var err error
+
+	switch os.Args[1] {
+	case "config":
+		if len(os.Args) == 2 {
+			app.printer.PrintError("Config requires parameters. Use -file and/or -levels flags")
+			return
+		}
+		err = configCmd.Parse(os.Args[2:])
+		if err != nil {
+			app.printer.PrintError(fmt.Sprintf("Error parsing config arguments: %v", err))
+			os.Exit(1)
+		}
+		levels := parseLevels(*logLevelsStr)
+		err = app.HandleConfig(*logFile, levels)
+	case "view":
+		err = viewCmd.Parse(os.Args[2:])
+		if err != nil {
+			app.printer.PrintError(fmt.Sprintf("Error parsing view arguments: %v", err))
+			os.Exit(1)
+		}
+		err = app.HandleView()
+	case "help":
+		err = helpCmd.Parse(os.Args[2:])
+		if err != nil {
+			app.printer.PrintError(fmt.Sprintf("Error parsing help arguments: %v", err))
+			os.Exit(1)
+		}
+		app.ShowHelp()
+		return
+	default:
+		config, configErr := app.configService.LoadConfig()
+		if configErr != nil {
+			app.printer.PrintError("No configuration found. Run 'slog config' first")
+			os.Exit(1)
+		}
+
+		level := ""
+		message := ""
+
+		if len(os.Args) == 2 {
+			message = os.Args[1]
+		} else if len(os.Args) >= 3 {
+			for levelName, flagName := range config.LogLevels {
+				if os.Args[1] == "-"+flagName || os.Args[1] == "--"+levelName {
+					level = levelName
+					message = strings.Join(os.Args[2:], " ")
+					break
+				}
+			}
+			if level == "" {
+				message = strings.Join(os.Args[1:], " ")
+			}
+		}
+
+		if message == "" {
+			app.printer.PrintError("No message provided")
+			os.Exit(1)
+		}
+
+		err = app.HandleLog(level, message)
+	}
+
+	if err != nil {
+		app.printer.PrintError(err.Error())
+		os.Exit(1)
+	}
+}
