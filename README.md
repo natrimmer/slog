@@ -2,6 +2,15 @@
 
 A simple CLI tool for structured logging with configurable levels and file output.
 
+## Features
+
+- Configurable log levels with short flag mapping
+- Configurable default log level for messages without explicit level
+- Plain text structured output format
+- Persistent configuration storage
+- UTF-8 message validation
+- Cross-platform file handling
+
 ## Installation
 
 ### Option 1: Download binary
@@ -54,7 +63,10 @@ slog "Application started"
 # Log with specific level
 slog -e "Database connection failed"
 
-# View current configuration
+# View current configuration and usage
+slog config
+
+# View log file contents
 slog view
 ```
 
@@ -71,6 +83,9 @@ slog --version    # Show version info
 ### Configuration
 
 ```bash
+# Show current configuration and usage
+slog config
+
 # Configure log file, levels, and default level (long form)
 slog config --file /path/to/logfile.log --levels "debug:d,info:i,warn:w,error:e" --default info
 
@@ -85,9 +100,17 @@ slog config --levels "info:i,error:e"
 
 # Configure only default level (keeps existing file and levels)
 slog config --default warn
+```
 
-# View current configuration
+### Viewing
+
+```bash
+# View log file contents
 slog view
+
+# View log file contents without header (quiet mode)
+slog view --quiet
+slog view -q
 ```
 
 ### Logging
@@ -128,11 +151,16 @@ Note: The tool does not filter by configured levels - it accepts any level for l
 $ slog config --file /var/log/myapp.log --levels "info:i,warn:w,error:e" --default info
 Configuration saved successfully.
 
-$ slog view
-Current configuration:
+$ slog config
+Current Configuration:
 Log File: /var/log/myapp.log
 Log Levels: map[error:e info:i warn:w]
 Default Level: info
+
+Configuration Usage:
+Set configuration:
+  slog config --file <path> --levels <level:flag,...> --default <level>
+  slog config -f <path> -l <level:flag,...> -d <level>
 ```
 
 ### Logging Messages
@@ -146,6 +174,22 @@ Logged to /var/log/myapp.log
 
 $ slog --error "Failed to process request"
 Logged to /var/log/myapp.log
+```
+
+### Viewing Log File Contents
+
+```bash
+$ slog view
+Log file contents: /var/log/myapp.log
+
+[2024-01-15 10:30:00] INFO: Application started successfully
+[2024-01-15 10:31:00] WARN: Database connection timeout
+[2024-01-15 10:32:00] ERROR: Failed to process request
+
+$ slog view --quiet
+[2024-01-15 10:30:00] INFO: Application started successfully
+[2024-01-15 10:31:00] WARN: Database connection timeout
+[2024-01-15 10:32:00] ERROR: Failed to process request
 ```
 
 ## Output Format
@@ -174,16 +218,6 @@ Configuration is stored in `~/.slog/config.json`:
   "default_level": "info"
 }
 ```
-
-## Features
-
-- Configurable log levels with short flag mapping
-- Configurable default log level for messages without explicit level
-- Plain text structured output format
-- Persistent configuration storage
-- UTF-8 message validation
-- Cross-platform file handling
-- Clean error handling and user feedback
 
 ## Development
 

@@ -198,6 +198,22 @@ func (cs *ConfigService) ViewConfig() error {
 	return nil
 }
 
+func (cs *ConfigService) ShowConfigUsage() {
+	cs.printer.Print(Bold + Cyan + "Configuration Usage:" + Reset)
+	cs.printer.Print(Bold + "Set configuration:" + Reset)
+	cs.printer.Print("  slog config --file <path> --levels <level:flag,...> --default <level>")
+	cs.printer.Print("  slog config -f <path> -l <level:flag,...> -d <level>")
+	cs.printer.Print("")
+	cs.printer.Print(Bold + "Examples:" + Reset)
+	cs.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e' --default info")
+	cs.printer.Print("  slog config -f ./app.log -l 'debug:d,info:i' -d debug")
+	cs.printer.Print("")
+	cs.printer.Print(Bold + "Flags:" + Reset)
+	cs.printer.Print("  --file, -f      Path to log file")
+	cs.printer.Print("  --levels, -l    Log levels in format 'level:flag,level:flag'")
+	cs.printer.Print("  --default, -d   Default log level when no level flag is provided")
+}
+
 type LogService struct {
 	configService *ConfigService
 	fs            FileSystem
@@ -255,6 +271,32 @@ func (ls *LogService) AppendLog(level, message string) error {
 	return nil
 }
 
+func (ls *LogService) ViewLogFile(quiet bool) error {
+	config, err := ls.configService.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	data, err := ls.fs.ReadFile(config.LogFile)
+	if err != nil {
+		return fmt.Errorf("error reading log file: %w", err)
+	}
+
+	if len(data) == 0 {
+		if !quiet {
+			ls.printer.Print(Bold + "Log file is empty: " + Reset + config.LogFile)
+		}
+		return nil
+	}
+
+	if !quiet {
+		ls.printer.Print(Bold + "Log file contents: " + Reset + config.LogFile)
+		ls.printer.Print("")
+	}
+	ls.printer.Print(string(data))
+	return nil
+}
+
 type App struct {
 	configService *ConfigService
 	logService    *LogService
@@ -279,8 +321,18 @@ func (app *App) HandleConfig(logFile string, logLevels map[string]string, defaul
 	return app.configService.SaveConfig(logFile, logLevels, defaultLevel)
 }
 
-func (app *App) HandleView() error {
-	return app.configService.ViewConfig()
+func (app *App) HandleView(quiet bool) error {
+	return app.logService.ViewLogFile(quiet)
+}
+
+func (app *App) HandleConfigView() error {
+	err := app.configService.ViewConfig()
+	if err != nil {
+		return err
+	}
+	app.printer.Print("")
+	app.configService.ShowConfigUsage()
+	return nil
 }
 
 func (app *App) HandleLog(level, message string) error {
@@ -301,8 +353,8 @@ func (app *App) ShowHelp() {
 	app.printer.Print(Dim + Magenta + "Simple logging tool with configurable levels" + Reset)
 	app.printer.Print("")
 	app.printer.Print(Bold + "Commands:" + Reset)
-	app.printer.Print("  config    Configure log file and levels")
-	app.printer.Print("  view      View current configuration")
+	app.printer.Print("  config    Show current configuration and usage, or set new configuration")
+	app.printer.Print("  view      View log file contents")
 	app.printer.Print("  help      Show this help message")
 	app.printer.Print("")
 	app.printer.Print(Bold + "Usage:" + Reset)
@@ -313,9 +365,11 @@ func (app *App) ShowHelp() {
 	app.printer.Print("  --help, -h       Show this help message")
 	app.printer.Print("")
 	app.printer.Print(Bold + "Examples:" + Reset)
+	app.printer.Print("  slog config                                                    # Show current config and usage")
 	app.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e' --default info")
 	app.printer.Print("  slog config -f ./app.log -l 'info:i,warn:w,error:e' -d info")
-	app.printer.Print("  slog view")
+	app.printer.Print("  slog view                                                      # View log file contents")
+	app.printer.Print("  slog view --quiet                                              # View log file contents without header")
 	app.printer.Print("  slog \"Application started\"")
 	app.printer.Print("  slog -i \"Info message\"")
 	app.printer.Print("  slog -w \"Warning message\"")
@@ -360,6 +414,8 @@ func main() {
 	defaultLevelShort := configCmd.String("d", "", "Default log level when no level flag is provided (short)")
 
 	viewCmd := flag.NewFlagSet("view", flag.ExitOnError)
+	quietFlag := viewCmd.Bool("quiet", false, "Don't show header, just log contents")
+	quietFlagShort := viewCmd.Bool("q", false, "Don't show header, just log contents (short)")
 	helpCmd := flag.NewFlagSet("help", flag.ExitOnError)
 
 	if len(os.Args) < 2 {
@@ -372,7 +428,12 @@ func main() {
 	switch os.Args[1] {
 	case "config":
 		if len(os.Args) == 2 {
-			app.printer.PrintError("Config requires parameters. Use --file/-f, --levels/-l, and/or --default/-d flags")
+			// Show current config and usage when no arguments provided
+			err = app.HandleConfigView()
+			if err != nil {
+				app.printer.PrintError(err.Error())
+				os.Exit(1)
+			}
 			return
 		}
 		err = configCmd.Parse(os.Args[2:])
@@ -397,6 +458,17 @@ func main() {
 			finalDefaultLevel = *defaultLevelShort
 		}
 
+		// Check if any config parameters were provided
+		if finalLogFile == "" && finalLevelsStr == "" && finalDefaultLevel == "" {
+			// Show current config and usage when no parameters provided
+			err = app.HandleConfigView()
+			if err != nil {
+				app.printer.PrintError(err.Error())
+				os.Exit(1)
+			}
+			return
+		}
+
 		levels := parseLevels(finalLevelsStr)
 		err = app.HandleConfig(finalLogFile, levels, finalDefaultLevel)
 	case "view":
@@ -405,7 +477,10 @@ func main() {
 			app.printer.PrintError(fmt.Sprintf("Error parsing view arguments: %v", err))
 			os.Exit(1)
 		}
-		err = app.HandleView()
+
+		// Use either long or short form for quiet flag
+		quiet := *quietFlag || *quietFlagShort
+		err = app.HandleView(quiet)
 	case "help":
 		err = helpCmd.Parse(os.Args[2:])
 		if err != nil {

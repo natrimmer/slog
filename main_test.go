@@ -20,6 +20,7 @@ type MockFileSystem struct {
 	writeErr   error
 	readData   []byte
 	readErr    error
+	readFiles  map[string][]byte // Different content for different files
 	writeFiles map[string][]byte // Track what was written
 	openErr    error
 	openedFile *MockFile
@@ -47,6 +48,7 @@ func (m *MockFile) Close() error {
 func NewMockFileSystem() *MockFileSystem {
 	return &MockFileSystem{
 		writeFiles: make(map[string][]byte),
+		readFiles:  make(map[string][]byte),
 		openedFile: &MockFile{},
 	}
 }
@@ -68,7 +70,17 @@ func (m *MockFileSystem) WriteFile(filename string, data []byte, perm os.FileMod
 }
 
 func (m *MockFileSystem) ReadFile(filename string) ([]byte, error) {
-	return m.readData, m.readErr
+	if m.readErr != nil {
+		return nil, m.readErr
+	}
+
+	// Check if we have specific data for this file
+	if data, exists := m.readFiles[filename]; exists {
+		return data, nil
+	}
+
+	// Fall back to the general readData
+	return m.readData, nil
 }
 
 func (m *MockFileSystem) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
@@ -605,27 +617,186 @@ func TestApp_HandleConfig(t *testing.T) {
 }
 
 func TestApp_HandleView(t *testing.T) {
-	mockFS := NewMockFileSystem()
-	mockFS.homeDir = "/tmp"
-	config := Config{LogFile: "/tmp/test.log", LogLevels: map[string]string{"info": "i"}}
-	configJSON, _ := json.Marshal(config)
-	mockFS.readData = configJSON
-	mockPrinter := &MockPrinter{}
-
-	configService := NewConfigService(mockFS, mockPrinter)
-	app := &App{
-		configService: configService,
-		printer:       mockPrinter,
+	tests := []struct {
+		name           string
+		logFileContent string
+		quiet          bool
+		setupMock      func(*MockFileSystem)
+		expectError    bool
+		expectedOutput string
+	}{
+		{
+			name:           "view log file with content",
+			logFileContent: "[2024-01-15 10:30:00] INFO: Test message\n[2024-01-15 10:31:00] WARN: Warning message\n",
+			quiet:          false,
+			setupMock: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{LogFile: "/tmp/test.log", LogLevels: map[string]string{"info": "i"}, DefaultLevel: "info"}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles["/tmp/.slog/config.json"] = configJSON
+				fs.readFiles["/tmp/test.log"] = []byte("[2024-01-15 10:30:00] INFO: Test message\n[2024-01-15 10:31:00] WARN: Warning message\n")
+			},
+			expectError:    false,
+			expectedOutput: "Log file contents:",
+		},
+		{
+			name:           "view log file with content (quiet mode)",
+			logFileContent: "[2024-01-15 10:30:00] INFO: Test message\n[2024-01-15 10:31:00] WARN: Warning message\n",
+			quiet:          true,
+			setupMock: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{LogFile: "/tmp/test.log", LogLevels: map[string]string{"info": "i"}, DefaultLevel: "info"}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles["/tmp/.slog/config.json"] = configJSON
+				fs.readFiles["/tmp/test.log"] = []byte("[2024-01-15 10:30:00] INFO: Test message\n[2024-01-15 10:31:00] WARN: Warning message\n")
+			},
+			expectError:    false,
+			expectedOutput: "INFO: Test message",
+		},
+		{
+			name:           "view empty log file",
+			logFileContent: "",
+			quiet:          false,
+			setupMock: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{LogFile: "/tmp/empty.log", LogLevels: map[string]string{"info": "i"}, DefaultLevel: "info"}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles["/tmp/.slog/config.json"] = configJSON
+				fs.readFiles["/tmp/empty.log"] = []byte("")
+			},
+			expectError:    false,
+			expectedOutput: "Log file is empty:",
+		},
+		{
+			name:           "view empty log file (quiet mode)",
+			logFileContent: "",
+			quiet:          true,
+			setupMock: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{LogFile: "/tmp/empty.log", LogLevels: map[string]string{"info": "i"}, DefaultLevel: "info"}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles["/tmp/.slog/config.json"] = configJSON
+				fs.readFiles["/tmp/empty.log"] = []byte("")
+			},
+			expectError:    false,
+			expectedOutput: "", // No output expected in quiet mode for empty file
+		},
+		{
+			name:  "log file read error",
+			quiet: false,
+			setupMock: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{LogFile: "/tmp/error.log", LogLevels: map[string]string{"info": "i"}, DefaultLevel: "info"}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles["/tmp/.slog/config.json"] = configJSON
+				// Don't set readFiles for error.log to trigger error
+				fs.readErr = errors.New("file not found")
+			},
+			expectError: true,
+		},
 	}
 
-	err := app.HandleView()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockFS := NewMockFileSystem()
+			mockPrinter := &MockPrinter{}
+			tt.setupMock(mockFS)
 
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
+			configService := NewConfigService(mockFS, mockPrinter)
+			logService := NewLogService(configService, mockFS, mockPrinter)
+			app := &App{
+				configService: configService,
+				logService:    logService,
+				printer:       mockPrinter,
+			}
+
+			err := app.HandleView(tt.quiet)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, got %v", err)
+				}
+				if tt.expectedOutput != "" {
+					if !mockPrinter.ContainsMessage(tt.expectedOutput) {
+						t.Errorf("Expected output containing %q", tt.expectedOutput)
+					}
+				} else {
+					// For quiet mode empty file test, verify no header messages
+					if mockPrinter.ContainsMessage("Log file is empty:") || mockPrinter.ContainsMessage("Log file contents:") {
+						t.Error("Expected no header output in quiet mode for empty file")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestApp_HandleConfigView(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func(*MockFileSystem)
+		expectError bool
+	}{
+		{
+			name: "view config successfully",
+			setupMock: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{
+					LogFile:      "/tmp/test.log",
+					LogLevels:    map[string]string{"info": "i", "warn": "w"},
+					DefaultLevel: "info",
+				}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles["/tmp/.slog/config.json"] = configJSON
+			},
+			expectError: false,
+		},
+		{
+			name: "config load error",
+			setupMock: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				fs.readErr = errors.New("config not found")
+			},
+			expectError: true,
+		},
 	}
 
-	if !mockPrinter.ContainsMessage("Current Configuration:") {
-		t.Error("Expected configuration view output")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockFS := NewMockFileSystem()
+			mockPrinter := &MockPrinter{}
+			tt.setupMock(mockFS)
+
+			configService := NewConfigService(mockFS, mockPrinter)
+			logService := NewLogService(configService, mockFS, mockPrinter)
+			app := &App{
+				configService: configService,
+				logService:    logService,
+				printer:       mockPrinter,
+			}
+
+			err := app.HandleConfigView()
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, got %v", err)
+				}
+				if !mockPrinter.ContainsMessage("Current Configuration:") {
+					t.Error("Expected configuration view output")
+				}
+				if !mockPrinter.ContainsMessage("Configuration Usage:") {
+					t.Error("Expected configuration usage output")
+				}
+			}
+		})
 	}
 }
 
