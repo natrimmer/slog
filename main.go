@@ -297,7 +297,8 @@ func (app *App) ShowHelp() {
 	app.printer.Print("  --help, -h       Show this help message")
 	app.printer.Print("")
 	app.printer.Print(Bold + "Examples:" + Reset)
-	app.printer.Print("  slog config -file ./app.log -levels 'info:i,warn:w,error:e'")
+	app.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e'")
+	app.printer.Print("  slog config -f ./app.log -l 'info:i,warn:w,error:e'")
 	app.printer.Print("  slog view")
 	app.printer.Print("  slog \"Application started\"")
 	app.printer.Print("  slog -i \"Info message\"")
@@ -336,7 +337,9 @@ func main() {
 
 	configCmd := flag.NewFlagSet("config", flag.ExitOnError)
 	logFile := configCmd.String("file", "", "Path to log file")
+	logFileShort := configCmd.String("f", "", "Path to log file (short)")
 	logLevelsStr := configCmd.String("levels", "", "Log levels in format 'level:flag,level:flag' (e.g. 'info:i,warn:w,error:e')")
+	logLevelsShort := configCmd.String("l", "", "Log levels in format 'level:flag,level:flag' (short)")
 
 	viewCmd := flag.NewFlagSet("view", flag.ExitOnError)
 	helpCmd := flag.NewFlagSet("help", flag.ExitOnError)
@@ -351,7 +354,7 @@ func main() {
 	switch os.Args[1] {
 	case "config":
 		if len(os.Args) == 2 {
-			app.printer.PrintError("Config requires parameters. Use -file and/or -levels flags")
+			app.printer.PrintError("Config requires parameters. Use --file/-f and/or --levels/-l flags")
 			return
 		}
 		err = configCmd.Parse(os.Args[2:])
@@ -359,8 +362,20 @@ func main() {
 			app.printer.PrintError(fmt.Sprintf("Error parsing config arguments: %v", err))
 			os.Exit(1)
 		}
-		levels := parseLevels(*logLevelsStr)
-		err = app.HandleConfig(*logFile, levels)
+
+		// Use either long or short form
+		finalLogFile := *logFile
+		if finalLogFile == "" {
+			finalLogFile = *logFileShort
+		}
+
+		finalLevelsStr := *logLevelsStr
+		if finalLevelsStr == "" {
+			finalLevelsStr = *logLevelsShort
+		}
+
+		levels := parseLevels(finalLevelsStr)
+		err = app.HandleConfig(finalLogFile, levels)
 	case "view":
 		err = viewCmd.Parse(os.Args[2:])
 		if err != nil {
