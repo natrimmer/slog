@@ -87,12 +87,13 @@ slog --error "Error occurred"
 
 ## Log Levels
 
-Supported levels (case-insensitive):
+Log levels are configured via the `--levels` flag using the format `level:flag`. Any level name can be used, but common ones include:
+- `debug:d` - Detailed diagnostic information
+- `info:i` - General information messages  
+- `warn:w` - Warning messages
+- `error:e` - Error messages
 
-- `debug` - Detailed diagnostic information
-- `info` - General information messages
-- `warn` - Warning messages
-- `error` - Error messages
+Note: The tool does not filter by configured levels - it accepts any level for logging.
 
 ## Example Usage
 
@@ -123,14 +124,12 @@ Logged to /var/log/myapp.log
 
 ## Output Format
 
-Logs are written in JSON format with the following fields:
+Logs are written in plain text format:
 
-```json
-{
-  "timestamp": "2024-01-15T10:30:45Z",
-  "level": "info",
-  "message": "Application started successfully"
-}
+```
+[2006-01-02 15:04:05] INFO: Application started successfully
+[2006-01-02 15:04:05] WARN: Database connection timeout
+[2006-01-02 15:04:05] ERROR: Failed to process request
 ```
 
 ## Configuration Storage
@@ -139,8 +138,8 @@ Configuration is stored in `~/.slog/config.json`:
 
 ```json
 {
-  "logFile": "/var/log/myapp.log",
-  "logLevels": {
+  "log_file": "/var/log/myapp.log",
+  "log_levels": {
     "info": "i",
     "warn": "w", 
     "error": "e"
@@ -150,8 +149,8 @@ Configuration is stored in `~/.slog/config.json`:
 
 ## Features
 
-- Configurable log levels with filtering
-- JSON structured output format
+- Configurable log levels with short flag mapping
+- Plain text structured output format
 - Persistent configuration storage
 - UTF-8 message validation
 - Cross-platform file handling
