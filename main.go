@@ -221,14 +221,18 @@ func (ls *LogService) AppendLog(level, message string) error {
 		return fmt.Errorf("error opening log file: %w", err)
 	}
 	defer func() {
-		if err := file.Close(); err != nil {
-			fmt.Printf("Warning: failed to close log file: %v\n", err)
+		if file != nil {
+			if err := file.Close(); err != nil {
+				fmt.Printf("Warning: failed to close log file: %v\n", err)
+			}
 		}
 	}()
 
-	_, err = file.WriteString(logEntry)
-	if err != nil {
-		return fmt.Errorf("error writing to log file: %w", err)
+	if file != nil {
+		_, err = file.WriteString(logEntry)
+		if err != nil {
+			return fmt.Errorf("error writing to log file: %w", err)
+		}
 	}
 
 	ls.printer.PrintSuccess(fmt.Sprintf("Logged to %s", config.LogFile))
