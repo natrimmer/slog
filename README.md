@@ -4,13 +4,34 @@ A simple CLI tool for structured logging with configurable levels and file outpu
 
 ## Installation
 
-### Option 1: Using Go
+### Option 1: Download binary
+
+Download the pre-built binary for your platform from the [GitHub Releases page](https://github.com/natrimmer/slog/releases/latest):
+
+```bash
+# Example for Linux (amd64)
+curl -L https://github.com/natrimmer/slog/releases/latest/download/slog_linux_amd64 -o slog
+chmod +x slog
+sudo mv slog /usr/local/bin/
+
+# Example for macOS (intel)
+curl -L https://github.com/natrimmer/slog/releases/latest/download/slog_darwin_amd64 -o slog
+chmod +x slog
+sudo mv slog /usr/local/bin/
+
+# Example for macOS (Apple Silicon)
+curl -L https://github.com/natrimmer/slog/releases/latest/download/slog_darwin_arm64 -o slog
+chmod +x slog
+sudo mv slog /usr/local/bin/
+```
+
+### Option 2: Using Go
 
 ```bash
 go install github.com/natrimmer/slog@latest
 ```
 
-### Option 2: Build from source
+### Option 3: Build from source
 
 ```bash
 git clone https://github.com/natrimmer/slog.git
@@ -75,7 +96,7 @@ slog "Your message here"
 # Log with specific level using short flags
 slog -d "Debug information"
 slog -i "Info message"
-slog -w "Warning message"  
+slog -w "Warning message"
 slog -e "Error occurred"
 
 # Log with specific level using long flags
@@ -88,8 +109,9 @@ slog --error "Error occurred"
 ## Log Levels
 
 Log levels are configured via the `--levels` flag using the format `level:flag`. Any level name can be used, but common ones include:
+
 - `debug:d` - Detailed diagnostic information
-- `info:i` - General information messages  
+- `info:i` - General information messages
 - `warn:w` - Warning messages
 - `error:e` - Error messages
 
@@ -141,7 +163,7 @@ Configuration is stored in `~/.slog/config.json`:
   "log_file": "/var/log/myapp.log",
   "log_levels": {
     "info": "i",
-    "warn": "w", 
+    "warn": "w",
     "error": "e"
   }
 }
