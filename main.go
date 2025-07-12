@@ -30,8 +30,9 @@ const (
 )
 
 type Config struct {
-	LogFile   string            `json:"log_file"`
-	LogLevels map[string]string `json:"log_levels"`
+	LogFile      string            `json:"log_file"`
+	LogLevels    map[string]string `json:"log_levels"`
+	DefaultLevel string            `json:"default_level"`
 }
 
 type FileSystem interface {
@@ -98,12 +99,18 @@ func NewConfigService(fs FileSystem, printer Printer) *ConfigService {
 	return &ConfigService{fs: fs, printer: printer}
 }
 
-func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string) error {
+func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string, defaultLevel string) error {
 	existingConfig, _ := cs.LoadConfig()
 
 	config := Config{
-		LogFile:   "./log.txt",
-		LogLevels: map[string]string{"info": "i"},
+		LogFile: "./log.txt",
+		LogLevels: map[string]string{
+			"debug": "d",
+			"info":  "i",
+			"warn":  "w",
+			"error": "e",
+		},
+		DefaultLevel: "info",
 	}
 
 	if existingConfig != nil {
@@ -116,6 +123,10 @@ func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string)
 
 	if logLevels != nil {
 		config.LogLevels = logLevels
+	}
+
+	if defaultLevel != "" {
+		config.DefaultLevel = defaultLevel
 	}
 
 	if config.LogFile == "" {
@@ -147,6 +158,7 @@ func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string)
 	cs.printer.PrintSuccess("Configuration saved successfully")
 	cs.printer.Print(Bold + "Log File: " + Reset + config.LogFile)
 	cs.printer.Print(Bold + "Log Levels: " + Reset + fmt.Sprintf("%v", config.LogLevels))
+	cs.printer.Print(Bold + "Default Level: " + Reset + config.DefaultLevel)
 
 	return nil
 }
@@ -181,6 +193,7 @@ func (cs *ConfigService) ViewConfig() error {
 	cs.printer.Print(Bold + Cyan + "Current Configuration:" + Reset)
 	cs.printer.Print(Bold + "Log File: " + Reset + config.LogFile)
 	cs.printer.Print(Bold + "Log Levels: " + Reset + fmt.Sprintf("%v", config.LogLevels))
+	cs.printer.Print(Bold + "Default Level: " + Reset + config.DefaultLevel)
 
 	return nil
 }
@@ -210,7 +223,10 @@ func (ls *LogService) AppendLog(level, message string) error {
 	}
 
 	if level == "" {
-		level = "info"
+		level = config.DefaultLevel
+		if level == "" {
+			level = "info" // fallback if config has no default
+		}
 	}
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
@@ -259,8 +275,8 @@ func NewApp() *App {
 	}
 }
 
-func (app *App) HandleConfig(logFile string, logLevels map[string]string) error {
-	return app.configService.SaveConfig(logFile, logLevels)
+func (app *App) HandleConfig(logFile string, logLevels map[string]string, defaultLevel string) error {
+	return app.configService.SaveConfig(logFile, logLevels, defaultLevel)
 }
 
 func (app *App) HandleView() error {
@@ -297,8 +313,8 @@ func (app *App) ShowHelp() {
 	app.printer.Print("  --help, -h       Show this help message")
 	app.printer.Print("")
 	app.printer.Print(Bold + "Examples:" + Reset)
-	app.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e'")
-	app.printer.Print("  slog config -f ./app.log -l 'info:i,warn:w,error:e'")
+	app.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e' --default info")
+	app.printer.Print("  slog config -f ./app.log -l 'info:i,warn:w,error:e' -d info")
 	app.printer.Print("  slog view")
 	app.printer.Print("  slog \"Application started\"")
 	app.printer.Print("  slog -i \"Info message\"")
@@ -340,6 +356,8 @@ func main() {
 	logFileShort := configCmd.String("f", "", "Path to log file (short)")
 	logLevelsStr := configCmd.String("levels", "", "Log levels in format 'level:flag,level:flag' (e.g. 'info:i,warn:w,error:e')")
 	logLevelsShort := configCmd.String("l", "", "Log levels in format 'level:flag,level:flag' (short)")
+	defaultLevel := configCmd.String("default", "", "Default log level when no level flag is provided")
+	defaultLevelShort := configCmd.String("d", "", "Default log level when no level flag is provided (short)")
 
 	viewCmd := flag.NewFlagSet("view", flag.ExitOnError)
 	helpCmd := flag.NewFlagSet("help", flag.ExitOnError)
@@ -354,7 +372,7 @@ func main() {
 	switch os.Args[1] {
 	case "config":
 		if len(os.Args) == 2 {
-			app.printer.PrintError("Config requires parameters. Use --file/-f and/or --levels/-l flags")
+			app.printer.PrintError("Config requires parameters. Use --file/-f, --levels/-l, and/or --default/-d flags")
 			return
 		}
 		err = configCmd.Parse(os.Args[2:])
@@ -374,8 +392,13 @@ func main() {
 			finalLevelsStr = *logLevelsShort
 		}
 
+		finalDefaultLevel := *defaultLevel
+		if finalDefaultLevel == "" {
+			finalDefaultLevel = *defaultLevelShort
+		}
+
 		levels := parseLevels(finalLevelsStr)
-		err = app.HandleConfig(finalLogFile, levels)
+		err = app.HandleConfig(finalLogFile, levels, finalDefaultLevel)
 	case "view":
 		err = viewCmd.Parse(os.Args[2:])
 		if err != nil {

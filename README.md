@@ -71,17 +71,20 @@ slog --version    # Show version info
 ### Configuration
 
 ```bash
-# Configure log file and levels (long form)
-slog config --file /path/to/logfile.log --levels "debug:d,info:i,warn:w,error:e"
+# Configure log file, levels, and default level (long form)
+slog config --file /path/to/logfile.log --levels "debug:d,info:i,warn:w,error:e" --default info
 
-# Configure log file and levels (short form)
-slog config -f /path/to/logfile.log -l "debug:d,info:i,warn:w,error:e"
+# Configure log file, levels, and default level (short form)
+slog config -f /path/to/logfile.log -l "debug:d,info:i,warn:w,error:e" -d info
 
 # Configure only log file (keeps existing levels)
 slog config --file /var/log/app.log
 
-# Configure only levels (keeps existing file)
+# Configure only levels (keeps existing file and default)
 slog config --levels "info:i,error:e"
+
+# Configure only default level (keeps existing file and levels)
+slog config --default warn
 
 # View current configuration
 slog view
@@ -90,7 +93,7 @@ slog view
 ### Logging
 
 ```bash
-# Log message with default level (info)
+# Log message with configured default level
 slog "Your message here"
 
 # Log with specific level using short flags
@@ -122,13 +125,14 @@ Note: The tool does not filter by configured levels - it accepts any level for l
 ### Initial Setup
 
 ```bash
-$ slog config --file /var/log/myapp.log --levels "info:i,warn:w,error:e"
+$ slog config --file /var/log/myapp.log --levels "info:i,warn:w,error:e" --default info
 Configuration saved successfully.
 
 $ slog view
 Current configuration:
 Log File: /var/log/myapp.log
-Log Levels: info, warn, error
+Log Levels: map[error:e info:i warn:w]
+Default Level: info
 ```
 
 ### Logging Messages
@@ -162,16 +166,19 @@ Configuration is stored in `~/.slog/config.json`:
 {
   "log_file": "/var/log/myapp.log",
   "log_levels": {
+    "debug": "d",
     "info": "i",
     "warn": "w",
     "error": "e"
-  }
+  },
+  "default_level": "info"
 }
 ```
 
 ## Features
 
 - Configurable log levels with short flag mapping
+- Configurable default log level for messages without explicit level
 - Plain text structured output format
 - Persistent configuration storage
 - UTF-8 message validation

@@ -123,6 +123,7 @@ func TestConfigService_SaveConfig(t *testing.T) {
 		name           string
 		logFile        string
 		logLevels      map[string]string
+		defaultLevel   string
 		existingConfig *Config
 		setupMock      func(*MockFileSystem)
 		expectError    bool
@@ -130,76 +131,87 @@ func TestConfigService_SaveConfig(t *testing.T) {
 		expectedConfig *Config
 	}{
 		{
-			name:      "successful save with both parameters",
-			logFile:   "/tmp/test.log",
-			logLevels: map[string]string{"info": "i", "warn": "w"},
+			name:         "successful save with both parameters",
+			logFile:      "/tmp/test.log",
+			logLevels:    map[string]string{"info": "i", "warn": "w"},
+			defaultLevel: "info",
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
 			},
 			expectError: false,
 			expectedConfig: &Config{
-				LogFile:   "/tmp/test.log",
-				LogLevels: map[string]string{"info": "i", "warn": "w"},
+				LogFile:      "/tmp/test.log",
+				LogLevels:    map[string]string{"info": "i", "warn": "w"},
+				DefaultLevel: "info",
 			},
 		},
 		{
-			name:      "update only log file",
-			logFile:   "/tmp/new.log",
-			logLevels: nil,
+			name:         "update only log file",
+			logFile:      "/tmp/new.log",
+			logLevels:    nil,
+			defaultLevel: "",
 			existingConfig: &Config{
-				LogFile:   "/tmp/old.log",
-				LogLevels: map[string]string{"debug": "d"},
+				LogFile:      "/tmp/old.log",
+				LogLevels:    map[string]string{"debug": "d"},
+				DefaultLevel: "debug",
 			},
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
-				config := Config{LogFile: "/tmp/old.log", LogLevels: map[string]string{"debug": "d"}}
+				config := Config{LogFile: "/tmp/old.log", LogLevels: map[string]string{"debug": "d"}, DefaultLevel: "debug"}
 				configJSON, _ := json.Marshal(config)
 				fs.readData = configJSON
 			},
 			expectError: false,
 			expectedConfig: &Config{
-				LogFile:   "/tmp/new.log",
-				LogLevels: map[string]string{"debug": "d"},
+				LogFile:      "/tmp/new.log",
+				LogLevels:    map[string]string{"debug": "d"},
+				DefaultLevel: "debug",
 			},
 		},
 		{
-			name:      "update only log levels",
-			logFile:   "",
-			logLevels: map[string]string{"error": "e", "fatal": "f"},
+			name:         "update only log levels",
+			logFile:      "",
+			logLevels:    map[string]string{"error": "e", "fatal": "f"},
+			defaultLevel: "",
 			existingConfig: &Config{
-				LogFile:   "/tmp/existing.log",
-				LogLevels: map[string]string{"info": "i"},
+				LogFile:      "/tmp/existing.log",
+				LogLevels:    map[string]string{"info": "i"},
+				DefaultLevel: "info",
 			},
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
-				config := Config{LogFile: "/tmp/existing.log", LogLevels: map[string]string{"info": "i"}}
+				config := Config{LogFile: "/tmp/existing.log", LogLevels: map[string]string{"info": "i"}, DefaultLevel: "info"}
 				configJSON, _ := json.Marshal(config)
 				fs.readData = configJSON
 			},
 			expectError: false,
 			expectedConfig: &Config{
-				LogFile:   "/tmp/existing.log",
-				LogLevels: map[string]string{"error": "e", "fatal": "f"},
+				LogFile:      "/tmp/existing.log",
+				LogLevels:    map[string]string{"error": "e", "fatal": "f"},
+				DefaultLevel: "info",
 			},
 		},
 		{
-			name:      "no config file provided and no existing config",
-			logFile:   "",
-			logLevels: map[string]string{"info": "i"},
+			name:         "no config file provided and no existing config",
+			logFile:      "",
+			logLevels:    map[string]string{"info": "i"},
+			defaultLevel: "",
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
 				fs.readErr = errors.New("file not found")
 			},
 			expectError: false, // Should use default log file
 			expectedConfig: &Config{
-				LogFile:   "./log.txt",
-				LogLevels: map[string]string{"info": "i"},
+				LogFile:      "./log.txt",
+				LogLevels:    map[string]string{"info": "i"},
+				DefaultLevel: "info",
 			},
 		},
 		{
-			name:      "home directory error",
-			logFile:   "/tmp/test.log",
-			logLevels: map[string]string{"info": "i"},
+			name:         "home directory error",
+			logFile:      "/tmp/test.log",
+			logLevels:    map[string]string{"info": "i"},
+			defaultLevel: "info",
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeErr = errors.New("home dir error")
 			},
@@ -207,9 +219,10 @@ func TestConfigService_SaveConfig(t *testing.T) {
 			errorMsg:    "error getting home directory",
 		},
 		{
-			name:      "mkdir error",
-			logFile:   "/tmp/test.log",
-			logLevels: map[string]string{"info": "i"},
+			name:         "mkdir error",
+			logFile:      "/tmp/test.log",
+			logLevels:    map[string]string{"info": "i"},
+			defaultLevel: "info",
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
 				fs.mkdirErr = errors.New("mkdir error")
@@ -218,9 +231,10 @@ func TestConfigService_SaveConfig(t *testing.T) {
 			errorMsg:    "error creating config directory",
 		},
 		{
-			name:      "write file error",
-			logFile:   "/tmp/test.log",
-			logLevels: map[string]string{"info": "i"},
+			name:         "write file error",
+			logFile:      "/tmp/test.log",
+			logLevels:    map[string]string{"info": "i"},
+			defaultLevel: "info",
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
 				fs.writeErr = errors.New("write error")
@@ -237,7 +251,7 @@ func TestConfigService_SaveConfig(t *testing.T) {
 			tt.setupMock(mockFS)
 
 			configService := NewConfigService(mockFS, mockPrinter)
-			err := configService.SaveConfig(tt.logFile, tt.logLevels)
+			err := configService.SaveConfig(tt.logFile, tt.logLevels, tt.defaultLevel)
 
 			if tt.expectError {
 				if err == nil {
@@ -534,19 +548,22 @@ func TestApp_HandleConfig(t *testing.T) {
 		name           string
 		logFile        string
 		logLevels      map[string]string
+		defaultLevel   string
 		existingConfig bool
 		expectErr      bool
 	}{
 		{
-			name:      "successful config with both parameters",
-			logFile:   "/tmp/test.log",
-			logLevels: map[string]string{"info": "i", "warn": "w"},
-			expectErr: false,
+			name:         "successful config with both parameters",
+			logFile:      "/tmp/test.log",
+			logLevels:    map[string]string{"info": "i", "warn": "w"},
+			defaultLevel: "info",
+			expectErr:    false,
 		},
 		{
 			name:           "update only levels with existing config",
 			logFile:        "",
 			logLevels:      map[string]string{"error": "e"},
+			defaultLevel:   "",
 			existingConfig: true,
 			expectErr:      false,
 		},
@@ -559,7 +576,7 @@ func TestApp_HandleConfig(t *testing.T) {
 			mockPrinter := &MockPrinter{}
 
 			if tt.existingConfig {
-				config := Config{LogFile: "/tmp/existing.log", LogLevels: map[string]string{"info": "i"}}
+				config := Config{LogFile: "/tmp/existing.log", LogLevels: map[string]string{"info": "i"}, DefaultLevel: "info"}
 				configJSON, _ := json.Marshal(config)
 				mockFS.readData = configJSON
 			}
@@ -572,7 +589,7 @@ func TestApp_HandleConfig(t *testing.T) {
 				printer:       mockPrinter,
 			}
 
-			err := app.HandleConfig(tt.logFile, tt.logLevels)
+			err := app.HandleConfig(tt.logFile, tt.logLevels, tt.defaultLevel)
 
 			if tt.expectErr {
 				if err == nil {
