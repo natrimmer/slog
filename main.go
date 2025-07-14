@@ -33,6 +33,7 @@ type Config struct {
 	LogFile      string            `json:"log_file"`
 	LogLevels    map[string]string `json:"log_levels"`
 	DefaultLevel string            `json:"default_level"`
+	WriteMode    string            `json:"write_mode"`
 }
 
 type FileSystem interface {
@@ -99,7 +100,7 @@ func NewConfigService(fs FileSystem, printer Printer) *ConfigService {
 	return &ConfigService{fs: fs, printer: printer}
 }
 
-func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string, defaultLevel string) error {
+func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string, defaultLevel string, writeMode string) error {
 	existingConfig, _ := cs.LoadConfig()
 
 	config := Config{
@@ -111,6 +112,7 @@ func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string,
 			"error": "e",
 		},
 		DefaultLevel: "info",
+		WriteMode:    "append",
 	}
 
 	if existingConfig != nil {
@@ -127,6 +129,13 @@ func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string,
 
 	if defaultLevel != "" {
 		config.DefaultLevel = defaultLevel
+	}
+
+	if writeMode != "" {
+		if writeMode != "append" && writeMode != "prepend" {
+			return fmt.Errorf("write mode must be 'append' or 'prepend'")
+		}
+		config.WriteMode = writeMode
 	}
 
 	if config.LogFile == "" {
@@ -159,6 +168,7 @@ func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string,
 	cs.printer.Print(Bold + "Log File: " + Reset + config.LogFile)
 	cs.printer.Print(Bold + "Log Levels: " + Reset + fmt.Sprintf("%v", config.LogLevels))
 	cs.printer.Print(Bold + "Default Level: " + Reset + config.DefaultLevel)
+	cs.printer.Print(Bold + "Write Mode: " + Reset + config.WriteMode)
 
 	return nil
 }
@@ -194,6 +204,7 @@ func (cs *ConfigService) ViewConfig() error {
 	cs.printer.Print(Bold + "Log File: " + Reset + config.LogFile)
 	cs.printer.Print(Bold + "Log Levels: " + Reset + fmt.Sprintf("%v", config.LogLevels))
 	cs.printer.Print(Bold + "Default Level: " + Reset + config.DefaultLevel)
+	cs.printer.Print(Bold + "Write Mode: " + Reset + config.WriteMode)
 
 	return nil
 }
@@ -201,17 +212,18 @@ func (cs *ConfigService) ViewConfig() error {
 func (cs *ConfigService) ShowConfigUsage() {
 	cs.printer.Print(Bold + Cyan + "Configuration Usage:" + Reset)
 	cs.printer.Print(Bold + "Set configuration:" + Reset)
-	cs.printer.Print("  slog config --file <path> --levels <level:flag,...> --default <level>")
-	cs.printer.Print("  slog config -f <path> -l <level:flag,...> -d <level>")
+	cs.printer.Print("  slog config --file <path> --levels <level:flag,...> --default <level> --mode <append|prepend>")
+	cs.printer.Print("  slog config -f <path> -l <level:flag,...> -d <level> -m <append|prepend>")
 	cs.printer.Print("")
 	cs.printer.Print(Bold + "Examples:" + Reset)
-	cs.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e' --default info")
-	cs.printer.Print("  slog config -f ./app.log -l 'debug:d,info:i' -d debug")
+	cs.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e' --default info --mode append")
+	cs.printer.Print("  slog config -f ./app.log -l 'debug:d,info:i' -d debug -m prepend")
 	cs.printer.Print("")
 	cs.printer.Print(Bold + "Flags:" + Reset)
 	cs.printer.Print("  --file, -f      Path to log file")
 	cs.printer.Print("  --levels, -l    Log levels in format 'level:flag,level:flag'")
 	cs.printer.Print("  --default, -d   Default log level when no level flag is provided")
+	cs.printer.Print("  --mode, -m      Write mode: 'append' (default) or 'prepend'")
 }
 
 type LogService struct {
@@ -248,22 +260,40 @@ func (ls *LogService) AppendLog(level, message string) error {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	logEntry := fmt.Sprintf("[%s] %s: %s\n", timestamp, strings.ToUpper(level), message)
 
-	file, err := ls.fs.OpenFile(config.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("error opening log file: %w", err)
-	}
-	defer func() {
-		if file != nil {
-			if err := file.Close(); err != nil {
-				fmt.Printf("Warning: failed to close log file: %v\n", err)
-			}
+	if config.WriteMode == "prepend" {
+		// Read existing content
+		existingContent, err := ls.fs.ReadFile(config.LogFile)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("error reading existing log file: %w", err)
 		}
-	}()
 
-	if file != nil {
-		_, err = file.WriteString(logEntry)
+		// Prepend new log entry
+		newContent := logEntry + string(existingContent)
+
+		// Write the combined content
+		err = ls.fs.WriteFile(config.LogFile, []byte(newContent), 0644)
 		if err != nil {
 			return fmt.Errorf("error writing to log file: %w", err)
+		}
+	} else {
+		// Default append mode
+		file, err := ls.fs.OpenFile(config.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("error opening log file: %w", err)
+		}
+		defer func() {
+			if file != nil {
+				if err := file.Close(); err != nil {
+					fmt.Printf("Warning: failed to close log file: %v\n", err)
+				}
+			}
+		}()
+
+		if file != nil {
+			_, err = file.WriteString(logEntry)
+			if err != nil {
+				return fmt.Errorf("error writing to log file: %w", err)
+			}
 		}
 	}
 
@@ -317,8 +347,8 @@ func NewApp() *App {
 	}
 }
 
-func (app *App) HandleConfig(logFile string, logLevels map[string]string, defaultLevel string) error {
-	return app.configService.SaveConfig(logFile, logLevels, defaultLevel)
+func (app *App) HandleConfig(logFile string, logLevels map[string]string, defaultLevel string, writeMode string) error {
+	return app.configService.SaveConfig(logFile, logLevels, defaultLevel, writeMode)
 }
 
 func (app *App) HandleView(quiet bool) error {
@@ -366,8 +396,8 @@ func (app *App) ShowHelp() {
 	app.printer.Print("")
 	app.printer.Print(Bold + "Examples:" + Reset)
 	app.printer.Print("  slog config                                                    # Show current config and usage")
-	app.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e' --default info")
-	app.printer.Print("  slog config -f ./app.log -l 'info:i,warn:w,error:e' -d info")
+	app.printer.Print("  slog config --file ./app.log --levels 'info:i,warn:w,error:e' --default info --mode append")
+	app.printer.Print("  slog config -f ./app.log -l 'info:i,warn:w,error:e' -d info -m prepend")
 	app.printer.Print("  slog view                                                      # View log file contents")
 	app.printer.Print("  slog view --quiet                                              # View log file contents without header")
 	app.printer.Print("  slog \"Application started\"")
@@ -412,6 +442,8 @@ func main() {
 	logLevelsShort := configCmd.String("l", "", "Log levels in format 'level:flag,level:flag' (short)")
 	defaultLevel := configCmd.String("default", "", "Default log level when no level flag is provided")
 	defaultLevelShort := configCmd.String("d", "", "Default log level when no level flag is provided (short)")
+	writeMode := configCmd.String("mode", "", "Write mode: 'append' (default) or 'prepend'")
+	writeModeShort := configCmd.String("m", "", "Write mode: 'append' (default) or 'prepend' (short)")
 
 	viewCmd := flag.NewFlagSet("view", flag.ExitOnError)
 	quietFlag := viewCmd.Bool("quiet", false, "Don't show header, just log contents")
@@ -458,8 +490,13 @@ func main() {
 			finalDefaultLevel = *defaultLevelShort
 		}
 
+		finalWriteMode := *writeMode
+		if finalWriteMode == "" {
+			finalWriteMode = *writeModeShort
+		}
+
 		// Check if any config parameters were provided
-		if finalLogFile == "" && finalLevelsStr == "" && finalDefaultLevel == "" {
+		if finalLogFile == "" && finalLevelsStr == "" && finalDefaultLevel == "" && finalWriteMode == "" {
 			// Show current config and usage when no parameters provided
 			err = app.HandleConfigView()
 			if err != nil {
@@ -470,7 +507,7 @@ func main() {
 		}
 
 		levels := parseLevels(finalLevelsStr)
-		err = app.HandleConfig(finalLogFile, levels, finalDefaultLevel)
+		err = app.HandleConfig(finalLogFile, levels, finalDefaultLevel, finalWriteMode)
 	case "view":
 		err = viewCmd.Parse(os.Args[2:])
 		if err != nil {

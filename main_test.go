@@ -263,7 +263,7 @@ func TestConfigService_SaveConfig(t *testing.T) {
 			tt.setupMock(mockFS)
 
 			configService := NewConfigService(mockFS, mockPrinter)
-			err := configService.SaveConfig(tt.logFile, tt.logLevels, tt.defaultLevel)
+			err := configService.SaveConfig(tt.logFile, tt.logLevels, tt.defaultLevel, "")
 
 			if tt.expectError {
 				if err == nil {
@@ -601,7 +601,7 @@ func TestApp_HandleConfig(t *testing.T) {
 				printer:       mockPrinter,
 			}
 
-			err := app.HandleConfig(tt.logFile, tt.logLevels, tt.defaultLevel)
+			err := app.HandleConfig(tt.logFile, tt.logLevels, tt.defaultLevel, "")
 
 			if tt.expectErr {
 				if err == nil {
