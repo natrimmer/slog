@@ -66,21 +66,32 @@ func (m *MockFileSystem) WriteFile(filename string, data []byte, perm os.FileMod
 		return m.writeErr
 	}
 	m.writeFiles[filename] = data
+	// Also add to readFiles so subsequent reads can find it
+	if m.readFiles == nil {
+		m.readFiles = make(map[string][]byte)
+	}
+	m.readFiles[filename] = data
 	return nil
 }
 
 func (m *MockFileSystem) ReadFile(filename string) ([]byte, error) {
-	if m.readErr != nil {
-		return nil, m.readErr
-	}
-
 	// Check if we have specific data for this file
 	if data, exists := m.readFiles[filename]; exists {
 		return data, nil
 	}
 
+	// Check for specific errors (like os.ErrNotExist for missing files)
+	if m.readErr != nil {
+		return nil, m.readErr
+	}
+
 	// Fall back to the general readData
-	return m.readData, nil
+	if m.readData != nil {
+		return m.readData, nil
+	}
+
+	// If no data is set, return file not found error
+	return nil, os.ErrNotExist
 }
 
 func (m *MockFileSystem) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
@@ -412,12 +423,13 @@ func TestConfigService_ViewConfig(t *testing.T) {
 			checkMsg:  "Current Configuration:",
 		},
 		{
-			name: "config load error",
+			name: "config load error - creates default config",
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
 				fs.readErr = errors.New("config not found")
 			},
-			expectErr: true,
+			expectErr: false,
+			checkMsg:  "Configuration saved successfully",
 		},
 	}
 
@@ -551,6 +563,195 @@ func TestLogService_AppendLog(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Test prepend functionality
+func TestLogService_PrependLog(t *testing.T) {
+	tests := []struct {
+		name          string
+		level         string
+		message       string
+		existingData  string
+		setupMocks    func(*MockFileSystem)
+		expectErr     bool
+		errorMsg      string
+		expectedLevel string
+	}{
+		{
+			name:         "successful prepend to existing file",
+			level:        "warn",
+			message:      "new warning",
+			existingData: "[2023-01-01 12:00:00] INFO: old message\n",
+			setupMocks: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{
+					LogFile:   "/tmp/test.log",
+					LogLevels: map[string]string{"warn": "w"},
+					WriteMode: "prepend",
+				}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles = map[string][]byte{
+					"/tmp/.slog/config.json": configJSON,
+					"/tmp/test.log":          []byte("[2023-01-01 12:00:00] INFO: old message\n"),
+				}
+			},
+			expectErr:     false,
+			expectedLevel: "WARN",
+		},
+		{
+			name:         "successful prepend to empty file",
+			level:        "info",
+			message:      "first message",
+			existingData: "",
+			setupMocks: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{
+					LogFile:   "/tmp/test.log",
+					LogLevels: map[string]string{"info": "i"},
+					WriteMode: "prepend",
+				}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles = map[string][]byte{
+					"/tmp/.slog/config.json": configJSON,
+				}
+				fs.readErr = os.ErrNotExist // File doesn't exist yet
+			},
+			expectErr:     false,
+			expectedLevel: "INFO",
+		},
+		{
+			name:         "prepend with read error",
+			level:        "error",
+			message:      "error message",
+			existingData: "",
+			setupMocks: func(fs *MockFileSystem) {
+				fs.homeDir = "/tmp"
+				config := Config{
+					LogFile:   "/tmp/test.log",
+					LogLevels: map[string]string{"error": "e"},
+					WriteMode: "prepend",
+				}
+				configJSON, _ := json.Marshal(config)
+				fs.readFiles = map[string][]byte{
+					"/tmp/.slog/config.json": configJSON,
+				}
+				fs.readErr = errors.New("permission denied")
+			},
+			expectErr: true,
+			errorMsg:  "error reading existing log file",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockFS := NewMockFileSystem()
+			mockPrinter := &MockPrinter{}
+			tt.setupMocks(mockFS)
+
+			configService := NewConfigService(mockFS, mockPrinter)
+			logService := NewLogService(configService, mockFS, mockPrinter)
+
+			err := logService.AppendLog(tt.level, tt.message)
+
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("Expected error containing %q, got nil", tt.errorMsg)
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error containing %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, got %v", err)
+				}
+				if !mockPrinter.ContainsMessage("Logged to") {
+					t.Error("Expected success message about logging")
+				}
+			}
+		})
+	}
+}
+
+// Test WriteMode configuration
+func TestConfigService_WriteMode(t *testing.T) {
+	tests := []struct {
+		name        string
+		writeMode   string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "valid append mode",
+			writeMode:   "append",
+			expectError: false,
+		},
+		{
+			name:        "valid prepend mode",
+			writeMode:   "prepend",
+			expectError: false,
+		},
+		{
+			name:        "invalid mode",
+			writeMode:   "invalid",
+			expectError: true,
+			errorMsg:    "write mode must be 'append' or 'prepend'",
+		},
+		{
+			name:        "empty mode (should not error)",
+			writeMode:   "",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockFS := NewMockFileSystem()
+			mockPrinter := &MockPrinter{}
+			mockFS.homeDir = "/tmp"
+
+			configService := NewConfigService(mockFS, mockPrinter)
+			err := configService.SaveConfig("./test.log", map[string]string{"info": "i"}, "info", tt.writeMode)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error containing %q, got nil", tt.errorMsg)
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error containing %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, got %v", err)
+				}
+			}
+		})
+	}
+}
+
+// Test ViewConfig creates default config when none exists
+func TestConfigService_ViewConfig_CreateDefault(t *testing.T) {
+	mockFS := NewMockFileSystem()
+	mockPrinter := &MockPrinter{}
+	mockFS.homeDir = "/tmp"
+
+	// Set up the mock to simulate no config file initially
+	mockFS.readFiles = map[string][]byte{}
+
+	configService := NewConfigService(mockFS, mockPrinter)
+
+	// ViewConfig should create a default config when none exists
+	err := configService.ViewConfig()
+	if err != nil {
+		t.Errorf("Expected no error from ViewConfig, got %v", err)
+	}
+
+	// Check that warning message was printed
+	if !mockPrinter.ContainsMessage("No configuration found. Creating default configuration...") {
+		t.Error("Expected warning message about creating default configuration")
+	}
+
+	// Check that success message was printed (from SaveConfig)
+	if !mockPrinter.ContainsMessage("Configuration saved successfully") {
+		t.Error("Expected success message about configuration being saved")
 	}
 }
 
@@ -756,12 +957,12 @@ func TestApp_HandleConfigView(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "config load error",
+			name: "config load error - creates default config",
 			setupMock: func(fs *MockFileSystem) {
 				fs.homeDir = "/tmp"
 				fs.readErr = errors.New("config not found")
 			},
-			expectError: true,
+			expectError: false,
 		},
 	}
 

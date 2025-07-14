@@ -123,7 +123,7 @@ func (cs *ConfigService) SaveConfig(logFile string, logLevels map[string]string,
 		config.LogFile = logFile
 	}
 
-	if logLevels != nil {
+	if len(logLevels) > 0 {
 		config.LogLevels = logLevels
 	}
 
@@ -197,10 +197,29 @@ func (cs *ConfigService) LoadConfig() (*Config, error) {
 func (cs *ConfigService) ViewConfig() error {
 	config, err := cs.LoadConfig()
 	if err != nil {
-		return err
+		cs.printer.PrintWarning("No configuration found. Creating default configuration...")
+		cs.printer.Print("")
+		// Create default configuration
+		err = cs.SaveConfig("", nil, "", "")
+		if err != nil {
+			return fmt.Errorf("error creating default configuration: %w", err)
+		}
+		cs.printer.Print("")
+		// Load the newly created config
+		config, err = cs.LoadConfig()
+		if err != nil {
+			return err
+		}
 	}
 
+	homeDir, err := cs.fs.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("error getting home directory: %w", err)
+	}
+	configFile := filepath.Join(homeDir, ".slog", "config.json")
+
 	cs.printer.Print(Bold + Cyan + "Current Configuration:" + Reset)
+	cs.printer.Print(Bold + "Config File: " + Reset + configFile)
 	cs.printer.Print(Bold + "Log File: " + Reset + config.LogFile)
 	cs.printer.Print(Bold + "Log Levels: " + Reset + fmt.Sprintf("%v", config.LogLevels))
 	cs.printer.Print(Bold + "Default Level: " + Reset + config.DefaultLevel)
@@ -506,7 +525,10 @@ func main() {
 			return
 		}
 
-		levels := parseLevels(finalLevelsStr)
+		var levels map[string]string
+		if finalLevelsStr != "" {
+			levels = parseLevels(finalLevelsStr)
+		}
 		err = app.HandleConfig(finalLogFile, levels, finalDefaultLevel, finalWriteMode)
 	case "view":
 		err = viewCmd.Parse(os.Args[2:])
